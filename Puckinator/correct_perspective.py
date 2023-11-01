@@ -1,94 +1,91 @@
 import cv2 as cv
 import numpy as np
-import json
 
 
-def load_calibration_data(json_file):
-    with open(json_file, "r") as f:
-        loaded_data = json.load(f)
+def order_points(pts):
+    # Initialize a list of coordinates that will be ordered
+    # such that the first entry in the list is the top-left,
+    # the second entry is the top-right, the third is the
+    # bottom-right, and the fourth is the bottom-left
+    rect = np.zeros((4, 2), dtype="float32")
 
-    camera_matrix = np.array(loaded_data["camera_matrix"])
-    distortion_coefficients = np.array(loaded_data["distortion_coefficients"])
+    # The top-left point will have the smallest sum, whereas
+    # the bottom-right point will have the largest sum
+    s = pts.sum(axis=1)
+    rect[0] = pts[np.argmin(s)]
+    rect[2] = pts[np.argmax(s)]
 
-    return camera_matrix, distortion_coefficients
+    # Compute the difference between the points, the
+    # top-right point will have the smallest difference,
+    # whereas the bottom-left will have the largest difference
+    diff = np.diff(pts, axis=1)
+    rect[1] = pts[np.argmin(diff)]
+    rect[3] = pts[np.argmax(diff)]
+
+    # Return the ordered coordinates
+    return rect
 
 
 def main():
-    # Initialize the webcam
+    # Get the predefined dictionary
+    dictionary = cv.aruco.getPredefinedDictionary(cv.aruco.DICT_4X4_50)
+    # Create detector parameters
+    parameters = cv.aruco.DetectorParameters()
+    # Instantiate the ArucoDetector object
+    detector = cv.aruco.ArucoDetector(dictionary, parameters)
+
     cap = cv.VideoCapture(0)
 
-    # Load camera calibration data
-    camera_matrix, distortion_coefficients = load_calibration_data(
-        "camera_calibration.json"
-    )
-
-    # Chessboard settings
-    pattern_size = (9, 6)
-    square_size = 1.0  # Set this to your actual square size
-
-    # Prepare object points
-    objp = np.zeros((np.prod(pattern_size), 3), dtype=np.float32)
-    objp[:, :2] = np.indices(pattern_size).T.reshape(-1, 2)
-    objp *= square_size
-
-    frame_warp = None
-
     while True:
-        # Capture frame-by-frame
         ret, frame = cap.read()
         if not ret:
             print("Failed to grab frame")
             break
 
-        # Convert to grayscale
-        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+        # Detect markers
+        markerCorners, markerIds, rejectedCandidates = detector.detectMarkers(frame)
 
-        # Find the chessboard corners
-        ret, corners = cv.findChessboardCorners(gray, pattern_size)
+        if markerIds is not None:
+            # Draw marker boundaries
+            cv.aruco.drawDetectedMarkers(frame, markerCorners, markerIds)
 
-        if ret:
-            # Refine the corner positions
-            corners_subpix = cv.cornerSubPix(
-                gray,
-                corners,
-                (11, 11),
-                (-1, -1),
-                (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001),
-            )
+            if len(markerCorners) == 4:  # Ensure there are exactly 4 markers detected
+                # Calculate the center of each ArUco marker
+                centers = np.array([np.mean(crn[0], axis=0) for crn in markerCorners])
 
-            # Draw the corners
-            cv.drawChessboardCorners(frame, pattern_size, corners_subpix, ret)
+                # Sort and order the center points
+                sorted_corners = order_points(centers)
 
-            # Get the new camera matrix based on the free scaling parameter
-            newcameramtx, roi = cv.getOptimalNewCameraMatrix(
-                camera_matrix,
-                distortion_coefficients,
-                gray.shape[::-1],
-                1,
-                gray.shape[::-1],
-            )
+                # Define the dimensions of your paper in pixels
+                # You might want to adjust the width and height values according to your needs
+                paper_width = 1500
+                paper_height = 800
+                output_pts = np.array(
+                    [
+                        [0, 0],
+                        [paper_width - 1, 0],
+                        [paper_width - 1, paper_height - 1],
+                        [0, paper_height - 1],
+                    ],
+                    dtype="float32",
+                )
 
-            # Compute the homography matrix
-            H, _ = cv.findHomography(
-                corners_subpix,
-                cv.perspectiveTransform(objp[:, :2].reshape(-1, 1, 2), newcameramtx),
-            )
+                # Compute the perspective transform matrix
+                M = cv.getPerspectiveTransform(sorted_corners, output_pts)
 
-            # Apply the perspective transformation
-            h, w = frame.shape[:2]
-            frame_warp = cv.warpPerspective(frame, H, (w, h))
-        else:
-            frame_warp = np.zeros_like(frame)
+                # Apply the perspective transformation
+                warped = cv.warpPerspective(frame, M, (paper_width, paper_height))
 
-        # Combine original and warped images for display
-        combined_frame = np.hstack((frame, frame_warp))
-        cv.imshow("Original (left) vs Perspective Corrected (right)", combined_frame)
+                # Show the result
+                cv.imshow("Perspective Transform", warped)
 
-        key = cv.waitKey(50)
-        if key == 27:  # ESC key to break
+        # Show the frame
+        cv.imshow("Frame", frame)
+
+        key = cv.waitKey(1)
+        if key == 27:
             break
 
-    # When everything done, release the capture
     cap.release()
     cv.destroyAllWindows()
 
