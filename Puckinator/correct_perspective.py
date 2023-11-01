@@ -1,3 +1,4 @@
+import itertools
 import cv2 as cv
 import numpy as np
 
@@ -56,10 +57,12 @@ def main():
 
         # Check if any ArUco markers were detected
         if markerIds is not None:
+            detectedMarkers = list(zip(markerCorners, markerIds))
             # Draw the boundaries of the detected ArUco markers on the frame
             cv.aruco.drawDetectedMarkers(frame, markerCorners, markerIds)
 
             # Proceed if exactly four ArUco markers are detected
+<<<<<<< HEAD
             if num_frames <= CALIB_FRAME:
                 if len(markerCorners) == 4:
                 
@@ -68,6 +71,25 @@ def main():
 
                     # Order the center points of the ArUco markers
                     sorted_corners = order_points(centers)
+=======
+            if len(markerCorners) == 4:
+                sorted_markers = list(
+                    zip(*sorted(detectedMarkers, key=lambda marker: marker[1]))
+                )[0]
+
+                print(f"Sorted markers:\n{sorted_markers}")
+
+                desired_corners = np.array(
+                    [marker[0][0] for marker in sorted_markers]
+                )  # Extracting the first corner of each marker
+
+                print(
+                    f"Desired corners (has shape {desired_corners.shape}):\n{desired_corners}"
+                )
+
+                # Order the center points of the ArUco markers
+                # sorted_corners = order_points(desired_corners)
+>>>>>>> a3eb533d0ab26fdeb9ac6f53b673a5eabbd3c06c
 
                     
                     # Define the coordinates of the corners of the paper in the output image
@@ -81,9 +103,15 @@ def main():
                         dtype="float32",
                     )
 
+<<<<<<< HEAD
                     # Compute the perspective transform matrix to transform the perspective
                     # of the captured frame to match the dimensions of the paper
                     M = cv.getPerspectiveTransform(sorted_corners, output_pts)
+=======
+                # Compute the perspective transform matrix to transform the perspective
+                # of the captured frame to match the dimensions of the paper
+                M = cv.getPerspectiveTransform(desired_corners, output_pts)
+>>>>>>> a3eb533d0ab26fdeb9ac6f53b673a5eabbd3c06c
 
                     if num_frames == CALIB_FRAME:
                         calibrated_m = M
