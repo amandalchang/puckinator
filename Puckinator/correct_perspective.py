@@ -5,11 +5,11 @@ import serial
 
 # Constants
 CALIB_FRAME = 10  # Number of frames grabbed
-table_width = 3925
-table_height = 1875
-desired_fps = 35
-arm_length = 11 # arm legnth in inches
-displacement = 10 # distance between motors in inches
+TABLE_WIDTH = 3925
+TABLE_HEIGHT = 1875
+DESIRED_FPS = 35
+ARM_LENGTH = 11 # arm legnth in inches
+DISPLACEMENT = 10 # distance between motors in inches
 
 def coordinateconverter(cX, cY, arm_length, displacement):
     """
@@ -25,20 +25,20 @@ def coordinateconverter(cX, cY, arm_length, displacement):
         length: The length of each of the four arms (inches)
         displacement: The distance between the motors (inches)
     Returns:
-        q1: the CCW angle of the left motor from the horizontal
-        q2: the CCW angle of the right motor from the horizontal
+        q1: the radian CCW angle of the left motor from the horizontal
+        q2: the radian CCW angle of the right motor from the horizontal
     """
     # Length of the diagonal between the origin and (cX, cY)
     diag1 = np.sqrt(cX**2 + cY**2)
     # Calculating left motor angle
-    q1 = np.arctan(cY/cX) + np.arccos(diag1/(2*arm_length))
+    theta = np.arctan(cY/cX) + np.arccos(diag1/(2*arm_length))
 
     # Length of the diagonal between the center of the right motor and (cX, cY)
     diag2 = np.sqrt((displacement - cX)**2 + cY**2)
     # Calculating right motor angle
-    q2 = np.pi - np.arctan(cY/(displacement - cX)) - np.arccos(diag2/(2*arm_length))
+    phi = np.pi - np.arctan(cY/(displacement - cX)) - np.arccos(diag2/(2*arm_length))
     
-    return (q1, q2)
+    return (theta, phi)
 
 class PerspectiveCorrector:
     def __init__(self, width, height) -> None:
@@ -83,9 +83,9 @@ class PerspectiveCorrector:
                 output_pts = np.array(
                     [
                         [0, 0],
-                        [table_width - 1, 0],
-                        [table_width - 1, table_height - 1],
-                        [0, table_height - 1],
+                        [TABLE_WIDTH - 1, 0],
+                        [TABLE_WIDTH - 1, TABLE_HEIGHT - 1],
+                        [0, TABLE_HEIGHT - 1],
                     ],
                     dtype="float32",
                 )
@@ -139,17 +139,20 @@ class PuckDetector:
 def main():
     # Initialize the video capture object to capture video from the default camera (camera 0)
     cap = cv.VideoCapture(0)
-    cap.set(12, 2)
+    # cap.set(12, 2)
     corrector = PerspectiveCorrector(3925, 1875)
     detector = PuckDetector()
 
-    arduino = serial.Serial(port="/dev/tty.usbmodem1101", baudrate=115200)
+    arduino = serial.Serial(port="/dev/tty.usbmodem2101", baudrate=115200)
     # Initialize the number of frames
     num_frames = 0
 
     while True:
         # Capture a frame from the camera
         ret, frame = cap.read()
+        # Converting the image to grayscale and then to binary
+        frame = cv.threshold(cv.cvtColor(frame, cv.COLOR_BGR2GRAY), 127, 255, 0)
+
         # Check if the frame was successfully captured
         if not ret:
             print("Failed to grab frame")
@@ -222,6 +225,9 @@ def main():
                         # Show the image with the detected object
                         cv.imshow("Processed Frame", corrected_frame)
                         print(center)
+                        # (theta, phi) = coordinateconverter(cX, cY, ARM_LENGTH, DISPLACEMENT)
+                        # arduino.write(f"({theta, phi})\n".encode("utf-8"))
+                        # print(f"left: {theta} radians, right: {phi} radians written to serial")
 
                         # Calculate the x_in value based on the center coordinates
                         x_in = round((float(center[1]) / 100) - 9.375, 2)
@@ -244,7 +250,6 @@ def main():
         if key == ord("c"):
             corrector.calibrate(frame)
 
-    serial_thread.stop()
     # Release the video capture object to free resources
     cap.release()
     # Destroy all OpenCV-created windows to free resources
