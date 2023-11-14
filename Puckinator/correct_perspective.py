@@ -1,15 +1,17 @@
 import cv2 as cv
 import numpy as np
 import serial
-
+import time
 
 # Constants
 CALIB_FRAME = 10  # Number of frames grabbed
 TABLE_WIDTH = 3925
 TABLE_HEIGHT = 1875
 DESIRED_FPS = 35
-ARM_LENGTH = 11 # arm legnth in inches
-DISPLACEMENT = 10 # distance between motors in inches
+ARM_LENGTH = 11  # arm legnth in inches
+DISPLACEMENT = 10  # distance between motors in inches
+SERIAL_DELAY = 0.01
+
 
 def coordinateconverter(cX, cY, arm_length, displacement):
     """
@@ -31,14 +33,19 @@ def coordinateconverter(cX, cY, arm_length, displacement):
     # Length of the diagonal between the origin and (cX, cY)
     diag1 = np.sqrt(cX**2 + cY**2)
     # Calculating left motor angle
-    theta = np.arctan(cY/cX) + np.arccos(diag1/(2*arm_length))
+    theta = np.arctan(cY / cX) + np.arccos(diag1 / (2 * arm_length))
 
     # Length of the diagonal between the center of the right motor and (cX, cY)
-    diag2 = np.sqrt((displacement - cX)**2 + cY**2)
+    diag2 = np.sqrt((displacement - cX) ** 2 + cY**2)
     # Calculating right motor angle
-    phi = np.pi - np.arctan(cY/(displacement - cX)) - np.arccos(diag2/(2*arm_length))
-    
+    phi = (
+        np.pi
+        - np.arctan(cY / (displacement - cX))
+        - np.arccos(diag2 / (2 * arm_length))
+    )
+
     return (theta, phi)
+
 
 class PerspectiveCorrector:
     def __init__(self, width, height) -> None:
@@ -137,13 +144,15 @@ class PuckDetector:
 
 
 def main():
+    # Start timer
+    timer = time.perf_counter()
     # Initialize the video capture object to capture video from the default camera (camera 0)
-    cap = cv.VideoCapture(0)
+    cap = cv.VideoCapture(4)
     # cap.set(12, 2)
     corrector = PerspectiveCorrector(3925, 1875)
     detector = PuckDetector()
 
-    arduino = serial.Serial(port="/dev/tty.usbmodem2101", baudrate=115200)
+    arduino = serial.Serial(port="/dev/ttyACM1", baudrate=115200, write_timeout=0.1)
     # Initialize the number of frames
     num_frames = 0
 
@@ -151,7 +160,7 @@ def main():
         # Capture a frame from the camera
         ret, frame = cap.read()
         # Converting the image to grayscale and then to binary
-        frame = cv.threshold(cv.cvtColor(frame, cv.COLOR_BGR2GRAY), 127, 255, 0)
+        # frame = cv.threshold(cv.cvtColor(frame, cv.COLOR_BGR2GRAY), 127, 255, 0)
 
         # Check if the frame was successfully captured
         if not ret:
@@ -161,82 +170,87 @@ def main():
             # Apply the perspective transformation to the captured frame
             corrected_frame = corrector.correct_frame(frame)
             if corrected_frame is not None:
-                # # Display the result of the perspective transformation
-                # # print("corrected frame is not none")
-                # detect_result = detector.detect_puck(corrected_frame)
-                # if detect_result is not None:
-                #     detected_frame, center = detect_result
-                #     # print("detect result is not none")
-                #     if detected_frame is not None:
-                #         # print("showing perspective corrected frame")
+                # Display the result of the perspective transformation
+                # print("corrected frame is not none")
+                detect_result = detector.detect_puck(corrected_frame)
+                if detect_result is not None:
+                    detected_frame, center = detect_result
+                    # print("detect result is not none")
+                    if detected_frame is not None:
+                        # print("showing perspective corrected frame")
+                        resize = cv.resize(detected_frame, (1280, 720))
+                        cv.imshow("Perspective Transform", resize)
+                        if center is not None:
+                            # print(center)
 
-                #         cv.imshow("Perspective Transform", detected_frame)
-                #         if center is not None:
-                #             print(center)
+                            x_in = round((float(center[1]) / 100) - 9.375, 2)
+                            if (time.perf_counter() - timer) > SERIAL_DELAY:
+                                try:
+                                    arduino.write(f"{x_in}\n".encode("utf-8"))
+                                except serial.serialutil.SerialTimeoutException:
+                                    print("Serial timeout exception occured")
+                                else:
+                                    print(f"{str(x_in)} written to serial port")
+                                timer = time.perf_counter()
+                # # Convert the image to grayscale
+                # # Convert the image from BGR to HSV color space
+                # hsv = cv.cvtColor(corrected_frame, cv.COLOR_BGR2HSV)
 
-                #             x_in = round((float(center[1]) / 100) - 9.375, 2)
+                # # Define the lower and upper bounds of the HSV values for thresholding
+                # # Adjust these values according to your object's color
+                # lower_hsv = (0, 0, 100)
+                # upper_hsv = (50, 255, 255)
 
-                #             arduino.write(f"{x_in}\n".encode("utf-8"))
-                #             print(f"{str(x_in)} written to serial port")
-                # Convert the image to grayscale
-                # Convert the image from BGR to HSV color space
-                hsv = cv.cvtColor(corrected_frame, cv.COLOR_BGR2HSV)
+                # # Threshold the HSV image to get only the desired colors
+                # mask = cv.inRange(hsv, lower_hsv, upper_hsv)
 
-                # Define the lower and upper bounds of the HSV values for thresholding
-                # Adjust these values according to your object's color
-                lower_hsv = (0, 0, 100)
-                upper_hsv = (50, 255, 255)
+                # cv.imshow("mask", mask)
 
-                # Threshold the HSV image to get only the desired colors
-                mask = cv.inRange(hsv, lower_hsv, upper_hsv)
+                # # Erode to remove noise
+                # kernel = np.ones((5, 5), np.uint8)
+                # eroded = cv.erode(mask, kernel, iterations=1)
 
-                cv.imshow("mask", mask)
+                # # Dilate to enhance the features
+                # dilated = cv.dilate(eroded, kernel, iterations=1)
 
-                # Erode to remove noise
-                kernel = np.ones((5, 5), np.uint8)
-                eroded = cv.erode(mask, kernel, iterations=1)
+                # # Find contours in the thresholded image
+                # contours, _ = cv.findContours(
+                #     dilated, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE
+                # )
 
-                # Dilate to enhance the features
-                dilated = cv.dilate(eroded, kernel, iterations=1)
+                # if contours:
+                #     # Find the largest contour in the frame and assume it is the object
+                #     largest_contour = max(contours, key=cv.contourArea)
+                #     cv.drawContours(
+                #         corrected_frame, [largest_contour], -1, (0, 255, 0), 3
+                #     )
+                #     M = cv.moments(largest_contour)
+                #     if M["m00"] != 0:
+                #         cX = int(M["m10"] / M["m00"])
+                #         cY = int(M["m01"] / M["m00"])
+                #         center = (cX, cY)
 
-                # Find contours in the thresholded image
-                contours, _ = cv.findContours(
-                    dilated, cv.RETR_TREE, cv.CHAIN_APPROX_SIMPLE
-                )
+                #         # Draw the largest contour and center on the image
+                #         cv.drawContours(
+                #             corrected_frame, [largest_contour], -1, (0, 255, 0), 3
+                #         )
+                #         cv.circle(corrected_frame, center, 7, (255, 255, 255), -1)
 
-                if contours:
-                    # Find the largest contour in the frame and assume it is the object
-                    largest_contour = max(contours, key=cv.contourArea)
-                    cv.drawContours(
-                        corrected_frame, [largest_contour], -1, (0, 255, 0), 3
-                    )
-                    M = cv.moments(largest_contour)
-                    if M["m00"] != 0:
-                        cX = int(M["m10"] / M["m00"])
-                        cY = int(M["m01"] / M["m00"])
-                        center = (cX, cY)
+                #         # Show the image with the detected object
+                #         cv.imshow("Processed Frame", corrected_frame)
+                #         print(center)
+                #         # (theta, phi) = coordinateconverter(cX, cY, ARM_LENGTH, DISPLACEMENT)
+                #         # arduino.write(f"({theta, phi})\n".encode("utf-8"))
+                #         # print(f"left: {theta} radians, right: {phi} radians written to serial")
 
-                        # Draw the largest contour and center on the image
-                        cv.drawContours(
-                            corrected_frame, [largest_contour], -1, (0, 255, 0), 3
-                        )
-                        cv.circle(corrected_frame, center, 7, (255, 255, 255), -1)
+                #         # Calculate the x_in value based on the center coordinates
+                #         x_in = round((float(center[1]) / 100) - 9.375, 2)
 
-                        # Show the image with the detected object
-                        cv.imshow("Processed Frame", corrected_frame)
-                        print(center)
-                        # (theta, phi) = coordinateconverter(cX, cY, ARM_LENGTH, DISPLACEMENT)
-                        # arduino.write(f"({theta, phi})\n".encode("utf-8"))
-                        # print(f"left: {theta} radians, right: {phi} radians written to serial")
-
-                        # Calculate the x_in value based on the center coordinates
-                        x_in = round((float(center[1]) / 100) - 9.375, 2)
-
-                        # Send the x_in value to the Arduino
-                        arduino.write(f"{x_in}\n".encode("utf-8"))
-                        print(f"{str(x_in)} written to serial port")
-                    else:
-                        print("No contour detected.")
+                #         # Send the x_in value to the Arduino
+                #         arduino.write(f"{x_in}\n".encode("utf-8"))
+                #         print(f"{str(x_in)} written to serial port")
+                #     else:
+                #         print("No contour detected.")
 
             num_frames = num_frames + 1
 
